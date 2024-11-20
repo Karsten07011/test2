@@ -192,7 +192,12 @@ function upgradeMultiShot() {
 function upgradeMoreRobots() {
     if (coins >= upgradeCosts.moreRobots && robots.length < 5) {
         coins -= upgradeCosts.moreRobots;
-        let newRobot = new Robot(robots.length * 40, wall.h - 320, 0); // Position new robot next to existing ones
+        let newRobot;
+        if (robots.length % 2 === 0) {
+            newRobot = new Robot(robots.length * 40, wall.h - 320, -40); // Position new robot to the left
+        } else {
+            newRobot = new Robot(robots.length * 40, wall.h - 320, 40); // Position new robot to the right
+        }
         robots.push(newRobot);
         upgradeCosts.moreRobots += 100;
         updateStats();
@@ -483,9 +488,6 @@ function loadProfile() {
         attackSpeed = profile.attackSpeed;
         range = profile.range;
         wave = profile.wave;
-        coins = profile.coins;
-        upgradeCosts = profile.upgradeCosts;
-        multiShotChance = profile.multiShotChance;
         coins = profile.coins;
         upgradeCosts = profile.upgradeCosts;
         multiShotChance = profile.multiShotChance;
