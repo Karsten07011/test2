@@ -4,24 +4,17 @@ let enemies = [];
 let robots = [];
 let health = 100;
 let maxHealth = 100;
-let healthRegen = 0;
 let damage = 20;
-let attackSpeed = 30; // frames between attacks
-let range = 1000;
+let attackSpeed = 20; // frames between attacks
+let range = 300;
 let lastAttackFrame = 0;
-let wave = 1;
-let coins = 0;
-let multiShotChance = 0.03; // 3% chance for multishot
-let maxRobots = 1; // Start with one robot
-let upgradeCosts = {
-    damage: 10,
-    attackSpeed: 20,
-    range: 10,
-    health: 5,
-    healthRegen: 15,
-    multiShot: 50,
-    moreRobots: 100
-};
+let bossDefeated = false;
+let animationFrame = 0;
+let cinematicMode = false;
+let cameraAngle = 0;
+let wallPieces = [];
+let wallExploded = false;
+let explosionDuration = 180; // Duration of the explosion in frames
 
 let outlineShader;
 let stars = [];
@@ -34,12 +27,10 @@ function preload() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight, WEBGL);
-    loadProfile(); // Load player profile
     wall = new Wall(-20, 0, 0, 80, 200, 500); // Move the wall to the left
     robot = new Robot(0, wall.h - 320, 0); // Place the robot on top of the wall
     robots.push(robot);
-    if (wave === 1) wave = 0; // Start on wave 0 if it's the first load
-    spawnEnemies(false); // Do not increment wave on initial load
+    spawnEnemies(); // Spawn initial enemies
     for (let i = 0; i < 1000; i++) {
         stars.push(new Star());
     }
@@ -47,41 +38,53 @@ function setup() {
 
 function draw() {
     background(0);
-    orbitControl();
+    if (!cinematicMode) {
+        setCameraPosition();
+    } else {
+        cinematicCamera();
+    }
     applyShader();
     drawStars();
     for (let r of robots) {
         r.show();
     }
-    wall.show();
-    let bossAlive = false;
+    if (!bossDefeated) {
+        wall.show();
+    } else {
+        if (explosionDuration > 0) {
+            explodeWall();
+            explosionDuration--;
+        } else {
+            animateWallRebuild();
+        }
+    }
     for (let enemy of enemies) {
         enemy.move();
         enemy.show();
-        if (enemy.isBoss) {
-            bossAlive = true;
-        }
         if (enemy.x < wall.x + wall.w / 2) {
             if (enemy.isBoss) {
-                wave = max(1, wave - 5); // Go back 5 waves if hit by a boss
+                bossDefeated = true;
                 enemies = []; // Clear current enemies
-                spawnEnemies(false); // Reset and start the current wave
+                cinematicMode = true;
                 break;
             }
             health -= 1;
             enemies.splice(enemies.indexOf(enemy), 1);
         }
     }
-    if (!bossAlive && enemies.length === 0) {
-        spawnEnemies(true); // Increment wave only if enemies are spawned
-    }
     for (let r of robots) {
         r.autoTarget();
     }
-    updateStats();
-    regenerateHealth();
-    draw3DText();
-    saveProfile(); // Save player profile
+    if (bossDefeated) {
+        animateRobotLeaving();
+    }
+}
+
+function setCameraPosition() {
+    let camX = 500 * cos(PI / 4);
+    let camY = -300;
+    let camZ = 500 * sin(PI / 4);
+    camera(camX, camY, camZ, 0, 0, 0, 0, 1, 0);
 }
 
 function applyShader() {
@@ -95,139 +98,86 @@ function drawStars() {
     }
 }
 
-function spawnEnemies(incrementWave) {
-    let isBossWave = wave % 5 === 0;
-    let enemyCount = isBossWave ? 1 : wave * 5; // Only spawn one enemy if it's a boss wave
-    let bossCount = isBossWave ? 1 : Math.floor(wave / 5); // Ensure only one boss spawns during a boss wave
+function spawnEnemies() {
+    let enemyCount = 50; // Spawn 50 enemies
     for (let i = 0; i < enemyCount; i++) {
-        let isBoss = bossCount > 0 && i < bossCount;
         setTimeout(() => {
-            enemies.push(new Enemy(400, random(-wall.h / 2, wall.h / 2), random(-wall.d / 2, wall.d / 2), wave, isBoss));
+            enemies.push(new Enemy(400, random(-wall.h / 2, wall.h / 2), random(-wall.d / 2, wall.d / 2), false));
         }, i * 500); // spawn enemies with a delay
     }
-    if (incrementWave && enemyCount > 0) wave++; // Increment wave only if enemies are spawned and incrementWave is true
+    setTimeout(spawnBoss, enemyCount * 500 + 3000); // Spawn boss after all enemies
 }
 
-function updateStats() {
-    const healthBar = document.getElementById('health-bar');
-    const coinsElement = document.getElementById('coins');
-    const waveElement = document.getElementById('wave');
-    const damageCost = document.getElementById('damage-cost');
-    const attackSpeedCost = document.getElementById('attackSpeed-cost');
-    const rangeCost = document.getElementById('range-cost');
-    const healthCost = document.getElementById('health-cost');
-    const healthRegenCost = document.getElementById('healthRegen-cost');
-    const multiShotCost = document.getElementById('multiShot-cost');
-    const moreRobotsCost = document.getElementById('moreRobots-cost');
-
-    if (healthBar) healthBar.style.width = `${(health / maxHealth) * 100}%`;
-    if (coinsElement) coinsElement.innerText = `Coins: ${coins}`;
-    if (waveElement) waveElement.innerText = `Wave: ${wave}`;
-    if (damageCost) damageCost.innerText = upgradeCosts.damage;
-    if (attackSpeedCost) attackSpeedCost.innerText = upgradeCosts.attackSpeed;
-    if (rangeCost) rangeCost.innerText = upgradeCosts.range;
-    if (healthCost) healthCost.innerText = upgradeCosts.health;
-    if (healthRegenCost) healthRegenCost.innerText = upgradeCosts.healthRegen;
-    if (multiShotCost) multiShotCost.innerText = upgradeCosts.multiShot;
-    if (moreRobotsCost) moreRobotsCost.innerText = upgradeCosts.moreRobots;
+function spawnBoss() {
+    enemies.push(new Enemy(400, 0, 0, true)); // Spawn a single big boss
 }
 
-function regenerateHealth() {
-    if (health < maxHealth) {
-        health += healthRegen / 60; // regenerate health per second
-        health = min(health, maxHealth);
-    }
-}
-
-function upgradeDamage() {
-    if (coins >= upgradeCosts.damage) {
-        coins -= upgradeCosts.damage;
-        damage += 5;
-        upgradeCosts.damage += 20;
-    }
-}
-
-function upgradeAttackSpeed() {
-    if (coins >= upgradeCosts.attackSpeed) {
-        coins -= upgradeCosts.attackSpeed;
-        attackSpeed = max(10, attackSpeed - 5);
-        upgradeCosts.attackSpeed += 20;
-    }
-}
-
-function upgradeRange() {
-    if (coins >= upgradeCosts.range) {
-        coins -= upgradeCosts.range;
-        range += 20;
-        upgradeCosts.range += 20;
-    }
-}
-
-function upgradeHealth() {
-    if (coins >= upgradeCosts.health) {
-        coins -= upgradeCosts.health;
-        maxHealth += 20;
-        health += 20;
-        upgradeCosts.health += 20;
-    }
-}
-
-function upgradeHealthRegen() {
-    if (coins >= upgradeCosts.healthRegen) {
-        coins -= upgradeCosts.healthRegen;
-        healthRegen += 1;
-        upgradeCosts.healthRegen += 10;
-    }
-}
-
-function upgradeMultiShot() {
-    if (coins >= upgradeCosts.multiShot) {
-        coins -= upgradeCosts.multiShot;
-        multiShotChance += 0.02; // Increase chance by 2%
-        upgradeCosts.multiShot += 50;
-        updateStats();
-    }
-}
-
-function upgradeMoreRobots() {
-    if (coins >= upgradeCosts.moreRobots && robots.length < 5) {
-        coins -= upgradeCosts.moreRobots;
-        let newRobot;
-        if (robots.length % 2 === 0) {
-            newRobot = new Robot(robots.length * 40, wall.h - 320, -40); // Position new robot to the left
-        } else {
-            newRobot = new Robot(robots.length * 40, wall.h - 320, 40); // Position new robot to the right
+function explodeWall() {
+    if (wallPieces.length === 0) {
+        for (let i = -wall.d / 2; i < wall.d / 2; i += 40) {
+            for (let j = -wall.h / 2; j < wall.h / 2; j += 40) {
+                wallPieces.push(new WallPiece(wall.x, wall.y + j, wall.z + i, 40, 40, 40));
+            }
         }
-        robots.push(newRobot);
-        upgradeCosts.moreRobots += 100;
-        updateStats();
+    }
+    for (let piece of wallPieces) {
+        piece.move();
+        piece.show();
+    }
+    wallExploded = true;
+}
+
+function animateWallRebuild() {
+    for (let piece of wallPieces) {
+        piece.moveBack();
+        piece.show();
+    }
+    if (wallPieces.every(piece => piece.isBack())) {
+        setTimeout(() => {
+            window.location.reload(); // Reload the window to reset everything
+        }, 2000); // Wait for 2 seconds before reloading
     }
 }
 
-function resetPlayerData() {
-    health = 100;
-    maxHealth = 100;
-    healthRegen = 0;
-    damage = 20;
-    attackSpeed = 30;
-    range = 1000;
-    wave = 1;
-    coins = 0;
-    multiShotChance = 0.03;
-    maxRobots = 1;
-    upgradeCosts = {
-        damage: 10,
-        attackSpeed: 20,
-        range: 10,
-        health: 5,
-        healthRegen: 15,
-        multiShot: 50,
-        moreRobots: 100
-    };
-    robots = [new Robot(0, wall.h - 320, 0)];
-    localStorage.removeItem('playerProfile');
-    updateStats();
-    spawnEnemies(false);
+function animateRobotLeaving() {
+    animationFrame++;
+    if (animationFrame < 180) {
+        robot.y -= 1; // Robot floats up for 3 seconds
+        robot.rotate();
+    } else if (animationFrame < 360) {
+        robot.x += 2; // Robot moves to the right for 3 seconds
+        robot.rotate();
+    } else if (animationFrame < 540) {
+        robot.y += 1; // Robot falls back down for 3 seconds
+        robot.rotate();
+    } else {
+        wallExploded = false;
+        explosionDuration = 180; // Reset explosion duration
+        animationFrame = 0;
+        resetAnimation(); // Reset the animation loop
+    }
+}
+
+function cinematicCamera() {
+    cameraAngle += 0.01;
+    let camX = cos(cameraAngle) * 500;
+    let camZ = sin(cameraAngle) * 500;
+    camera(camX, -200, camZ, robot.x, robot.y, robot.z, 0, 1, 0);
+    if (cameraAngle > PI) {
+        cinematicMode = false;
+        animationFrame = 0;
+    }
+}
+
+function resetAnimation() {
+    bossDefeated = false;
+    health = maxHealth;
+    enemies = [];
+    wallPieces = [];
+    wall = new Wall(-20, 0, 0, 80, 200, 500); // Reset the wall
+    robot = new Robot(0, wall.h - 320, 0); // Reset the robot
+    robots = [robot];
+    spawnEnemies();
 }
 
 class Robot {
@@ -235,12 +185,13 @@ class Robot {
         this.x = x;
         this.y = y;
         this.z = z;
+        this.rotation = 0;
     }
 
     show() {
         push();
         translate(this.x, this.y, this.z);
-        rotateY(HALF_PI); // Rotate the robot 90 degrees
+        rotateY(this.rotation); // Rotate the robot smoothly
         shader(outlineShader);
         outlineShader.setUniform('outlineColor', [0, 1, 0]);
         fill(255, 255, 255);
@@ -307,14 +258,9 @@ class Robot {
                 }
             }
             if (closestEnemy) {
-                if (random() < multiShotChance) {
-                    this.shootMultiShot(closestEnemy);
-                } else {
-                    this.shootLaser(closestEnemy);
-                }
+                this.shootLaser(closestEnemy);
                 closestEnemy.health -= damage;
                 if (closestEnemy.health <= 0) {
-                    coins += closestEnemy.isBoss ? 50 : 10;
                     enemies.splice(enemies.indexOf(closestEnemy), 1);
                 }
                 lastAttackFrame = frameCount;
@@ -330,19 +276,8 @@ class Robot {
         pop();
     }
 
-    shootMultiShot(target) {
-        let targets = enemies.filter(e => e !== target).slice(0, 2);
-        targets.unshift(target);
-        for (let i = 0; i < targets.length; i++) {
-            setTimeout(() => {
-                this.shootLaser(targets[i]);
-                targets[i].health -= damage;
-                if (targets[i].health <= 0) {
-                    coins += targets[i].isBoss ? 50 : 10;
-                    enemies.splice(enemies.indexOf(targets[i]), 1);
-                }
-            }, i * 100); // Delay each shot by 0.1 seconds
-        }
+    rotate() {
+        this.rotation += 0.05; // Smooth rotation
     }
 }
 
@@ -388,21 +323,58 @@ class Wall {
     }
 }
 
-class Enemy {
-    constructor(x, y, z, wave, isBoss) {
+class WallPiece {
+    constructor(x, y, z, w, h, d) {
         this.x = x;
         this.y = y;
         this.z = z;
-        this.speed = 2 + wave * 0.1;
-        this.health = 20 + wave * 5;
+        this.w = w;
+        this.h = h;
+        this.d = d;
+        this.vx = random(-5, 5);
+        this.vy = random(-5, 5);
+        this.vz = random(-5, 5);
+        this.originalX = x;
+        this.originalY = y;
+        this.originalZ = z;
+    }
+
+    move() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.z += this.vz;
+    }
+
+    moveBack() {
+        this.x = lerp(this.x, this.originalX, 0.05);
+        this.y = lerp(this.y, this.originalY, 0.05);
+        this.z = lerp(this.z, this.originalZ, 0.05);
+    }
+
+    isBack() {
+        return dist(this.x, this.y, this.z, this.originalX, this.originalY, this.originalZ) < 1;
+    }
+
+    show() {
+        push();
+        translate(this.x, this.y, this.z);
+        texture(wallTexture); // Apply texture to wall pieces
+        box(this.w, this.h, this.d);
+        pop();
+    }
+}
+
+class Enemy {
+    constructor(x, y, z, isBoss) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.speed = 2;
+        this.health = 20;
         this.isBoss = isBoss;
         if (isBoss) {
-            this.health *= 5;
+            this.health = 100000;
             this.speed *= 0.5;
-            if (wave >= 10) {
-                this.health *= 2;
-                this.speed *= 0.5;
-            }
         }
     }
 
@@ -417,7 +389,7 @@ class Enemy {
         if (this.isBoss) {
             outlineShader.setUniform('outlineColor', [1, 1, 1]);
             fill(0, 0, 0);
-            box(30);
+            box(60); // Make the boss bigger
         } else {
             outlineShader.setUniform('outlineColor', [1, 0, 0]);
             fill(255, 255, 255);
@@ -447,53 +419,4 @@ class Star {
 
 function windowResized() {
     resizeCanvas(windowWidth, windowHeight);
-}
-
-function draw3DText() {
-    push();
-    translate(-width / 2 + 20, -height / 2 + 20, 0);
-    fill(255, 215, 0); // Gold color for coins
-    textSize(32);
-    text(`Coins: ${coins}`, 0, 0);
-    translate(0, 40, 0);
-    fill(0, 255, 0); // Green color for wave
-    text(`Wave: ${wave}`, 0, 0);
-    pop();
-}
-
-function saveProfile() {
-    const profile = {
-        health,
-        maxHealth,
-        healthRegen,
-        damage,
-        attackSpeed,
-        range,
-        wave,
-        coins,
-        upgradeCosts,
-        multiShotChance,
-        maxRobots
-    };
-    localStorage.setItem('playerProfile', JSON.stringify(profile));
-}
-
-function loadProfile() {
-    const profile = JSON.parse(localStorage.getItem('playerProfile'));
-    if (profile) {
-        health = profile.health;
-        maxHealth = profile.maxHealth;
-        healthRegen = profile.healthRegen;
-        damage = profile.damage;
-        attackSpeed = profile.attackSpeed;
-        range = profile.range;
-        wave = profile.wave;
-        coins = profile.coins;
-        upgradeCosts = profile.upgradeCosts;
-        multiShotChance = profile.multiShotChance;
-        maxRobots = profile.maxRobots;
-        for (let i = 1; i < maxRobots; i++) {
-            robots.push(new Robot(i * 40, wall.h - 320, 0));
-        }
-    }
 }
